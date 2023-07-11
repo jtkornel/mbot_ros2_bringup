@@ -58,3 +58,4 @@ diff_drive_controller:
     wheel_radius: 0.0325
 
     use_stamped_vel: false
+    position_feedback: false
