@@ -17,12 +17,16 @@
 #
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler, TimerAction
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler, TimerAction, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.event_handlers import OnProcessExit, OnProcessStart
-from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution, EnvironmentVariable
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 
+from ament_index_python.packages import get_package_share_directory
+import os
+from pathlib import Path
 
 def generate_launch_description():
     # Declare arguments
@@ -83,6 +87,13 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument(
+            "sim_gazebo_classic",
+            default_value="false",
+            description="Enable gazebo classic simulation for hardware embedded in environment."
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
             "robot_controller",
             default_value="diff_drive_controller",
             choices=["diff_drive_controller", "forward_position_controller", "joint_trajectory_controller"],
@@ -98,7 +109,16 @@ def generate_launch_description():
     prefix = LaunchConfiguration("prefix")
     use_mock_hardware = LaunchConfiguration("use_mock_hardware")
     mock_sensor_commands = LaunchConfiguration("mock_sensor_commands")
+    sim_gazebo_classic = LaunchConfiguration("sim_gazebo_classic")
     robot_controller = LaunchConfiguration("robot_controller")
+
+
+    robot_controllers = PathJoinSubstitution(
+        [FindPackageShare(runtime_config_package), "config", controllers_file]
+    )
+    rviz_config_file = PathJoinSubstitution(
+        [FindPackageShare(description_package), "rviz", "mbot_ranger_dashing_raptor.rviz"]
+    )
 
     # Get URDF via xacro
     robot_description_content = Command(
@@ -118,17 +138,16 @@ def generate_launch_description():
             "mock_sensor_commands:=",
             mock_sensor_commands,
             " ",
+            "sim_gazebo_classic:=",
+            sim_gazebo_classic,
+            " ",
+            "simulation_controllers:=",
+            robot_controllers,
+            " "
         ]
     )
 
     robot_description = {"robot_description": robot_description_content}
-
-    robot_controllers = PathJoinSubstitution(
-        [FindPackageShare(runtime_config_package), "config", controllers_file]
-    )
-    rviz_config_file = PathJoinSubstitution(
-        [FindPackageShare(description_package), "rviz", "mbot_ranger_dashing_raptor.rviz"]
-    )
 
     control_node = Node(
         package="controller_manager",
@@ -149,6 +168,20 @@ def generate_launch_description():
         output="log",
         arguments=["-d", rviz_config_file],
     )
+
+    gazebo = IncludeLaunchDescription(
+                PythonLaunchDescriptionSource([os.path.join(
+                    get_package_share_directory('gazebo_ros'), 'launch'), '/gazebo.launch.py']),
+             )
+
+    description_package_path = get_package_share_directory("mbot_description")
+    gz_resource_path = SetEnvironmentVariable(name='GAZEBO_MODEL_PATH', value=[
+                                                EnvironmentVariable('GAZEBO_MODEL_PATH',
+                                                                    default_value=''),
+                                                '/usr/share/gazebo-11/models/:',
+                                                str(Path(description_package_path).parent.resolve())])
+# Set GAZEBO_MODEL_URI to empty string to prevent Gazebo from downloading models
+    gz_model_uri = SetEnvironmentVariable(name='GAZEBO_MODEL_URI', value=[''])
 
     joint_state_broadcaster_spawner = Node(
         package="controller_manager",
@@ -224,8 +257,10 @@ def generate_launch_description():
         + [
             control_node,
             robot_state_pub_node,
-            rviz_node,
             delay_joint_state_broadcaster_spawner_after_ros2_control_node,
+            gz_resource_path,
+            gz_model_uri,
+            gazebo,
         ]
         + delay_robot_controller_spawners_after_joint_state_broadcaster_spawner
         + delay_inactive_robot_controller_spawners_after_joint_state_broadcaster_spawner
